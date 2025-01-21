@@ -1,21 +1,44 @@
 import websockets
 from fastapi import FastAPI
 from fastapi.params import Header
-from starlette.websockets import WebSocket
+from starlette.websockets import WebSocket, WebSocketDisconnect
 
 app = FastAPI()
 
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.remove(websocket)
+
+    async def send_personal_message(self, message: str, websocket: WebSocket):
+        await websocket.send_text(message)
+
+    async def broadcast(self, message: str):
+        for connection in self.active_connections:
+            await connection.send_text(message)
+
+
+manager = ConnectionManager()
+
+
 @app.websocket("/ws/{room_id}")
 async def websocket_endpoint(websocket: WebSocket, ws_authorization: str = Header(None, convert_underscores=True), room_id: str=None):
-    print(ws_authorization)
-    print(room_id)
-    websockets.basic_auth(websocket, ["user", "password"])
-    await websocket.accept()
-    while True:
-        data = await websocket.receive_text()
-        await websocket.send_text(f"{ws_authorization}: Message text was: {data}")
-        print(f"Message text was: {data}")
-
+    await manager.connect(websocket)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await manager.send_personal_message(f"You wrote: {data}", websocket)
+            await manager.broadcast(f"Client #{room_id} says: {data}")
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+        await manager.broadcast(f"Client #{room_id} left the chat")
 
 
 
